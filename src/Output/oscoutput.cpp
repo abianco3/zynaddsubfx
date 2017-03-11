@@ -141,6 +141,15 @@ ZynOscPlugin::~ZynOscPlugin()
     delete middlewareThread;
 }
 
+const char* ZynOscDescriptor::label() const { return "ZASF"; }
+const char* ZynOscDescriptor::name() const { return "ZynAddSubFX"; }
+const char* ZynOscDescriptor::maker() const {
+    return "Nasca Octavian Paul <zynaddsubfx@yahoo.com>";
+}
+const char* ZynOscDescriptor::copyright() const {
+    return "GNU General Public License v2 or later";
+}
+
 ZynOscPlugin* ZynOscDescriptor::instantiate(unsigned long srate) const
 {
 	return new ZynOscPlugin(srate);
