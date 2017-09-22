@@ -26,28 +26,29 @@ using std::string;
 using std::vector;
 
 //Dummy variables and functions for linking purposes
-const char *instance_name = 0;
-class WavFile;
-namespace Nio {
-    bool start(void){return 1;};
-    void stop(void){};
-    void masterSwap(Master *){};
-    void waveNew(WavFile *){}
-    void waveStart(void){}
-    void waveStop(void){}
-    void waveEnd(void){}
-    bool setSource(string){return true;}
-    bool setSink(string){return true;}
-    set<string> getSources(void){return set<string>();}
-    set<string> getSinks(void){return set<string>();}
-    string getSource(void){return "";}
-    string getSink(void){return "";}
+namespace zyn {
+    const char *instance_name = 0;
+    class WavFile;
+    namespace Nio {
+        bool start(void){return 1;};
+        void stop(void){};
+        void masterSwap(Master *){};
+        void waveNew(WavFile *){}
+        void waveStart(void){}
+        void waveStop(void){}
+        void waveEnd(void){}
+        bool setSource(string){return true;}
+        bool setSink(string){return true;}
+        set<string> getSources(void){return set<string>();}
+        set<string> getSinks(void){return set<string>();}
+        string getSource(void){return "";}
+        string getSink(void){return "";}
+    }
 }
 
 
 void ZynOscPlugin::runSynth(float* outl, float* outr, unsigned long sample_count)
 {
-    Master *master = middleware->spawnMaster();
     master->GetAudioOutSamples(sample_count,
 			       (int)sampleRate,
 			       outl, outr);
@@ -55,7 +56,21 @@ void ZynOscPlugin::runSynth(float* outl, float* outr, unsigned long sample_count
 
 void ZynOscPlugin::sendOsc(const char* port, const char* args, ...)
 {
-	if(!strcmp(port, "/show-ui"))
+    if(!strcmp(port, "/save-master"))
+    {
+        va_list ap;
+        va_start(ap, args);
+        middleware->messageAnywhere("/save_xmz", "s", va_arg(ap, const char*));
+        va_end(ap);
+    }
+    else if(!strcmp(port, "/load-master"))
+    {
+        va_list ap;
+        va_start(ap, args);
+        middleware->messageAnywhere("/load_xmz", "s", va_arg(ap, const char*));
+        va_end(ap);
+    }
+    else if(!strcmp(port, "/show-ui"))
 	{
 		if(ui_pid)
 		{
@@ -77,17 +92,9 @@ void ZynOscPlugin::sendOsc(const char* port, const char* args, ...)
 			}
 		}
 	}
-	else if(!strcmp(port, "/close-ui"))
+    else if(!strcmp(port, "/hide-ui"))
 	{
-		if(ui_pid)
-		{
-			kill(ui_pid, SIGTERM);
-			ui_pid = 0;
-		}
-		else
-		{
-			// zyn-fusion is not running
-		}
+        hide_ui();
 	}
 	else
 	{
@@ -96,35 +103,63 @@ void ZynOscPlugin::sendOsc(const char* port, const char* args, ...)
 		char buf[1024];
 
 		rtosc_vmessage(buf, 1024, port, args, ap);
-		middleware->spawnMaster()->uToB->raw_write(buf);
+        master->uToB->raw_write(buf);
 		va_end(ap);
 	}
 }
 
-unsigned long ZynOscPlugin::buffersize() const
+void ZynOscPlugin::hide_ui()
 {
-	return middleware->spawnMaster()->synth.buffersize;
+    if(ui_pid)
+    {
+        kill(ui_pid, SIGTERM);
+        ui_pid = 0;
+    }
+    else
+    {
+        // zyn-fusion is not running
+    }
 }
 
+unsigned long ZynOscPlugin::buffersize() const
+{
+    return master->synth.buffersize;
+}
+
+void ZynOscPlugin::masterChangedCallback(zyn::Master *m)
+{
+    master = m;
+    master->setMasterChangedCallback(_masterChangedCallback, this);
+}
+
+void ZynOscPlugin::_masterChangedCallback(void *ptr, zyn::Master *m)
+{
+    ((ZynOscPlugin*)ptr)->masterChangedCallback(m);
+}
+
+extern "C" {
 //! the main entry point
 const OscDescriptor* osc_descriptor(unsigned long )
 {
     return new ZynOscDescriptor;
 }
+}
 
 ZynOscPlugin::ZynOscPlugin(unsigned long sampleRate)
 {
-    SYNTH_T synth;
+    zyn::SYNTH_T synth;
     synth.samplerate = sampleRate;
 
     this->sampleRate  = sampleRate;
 
     config.init();
 
-    sprng(time(NULL));
+    zyn::sprng(time(NULL));
 
     synth.alias();
-    middleware = new MiddleWare(std::move(synth), &config);
+    middleware = new zyn::MiddleWare(std::move(synth), &config);
+    masterChangedCallback(middleware->spawnMaster());
+
     middlewareThread = new std::thread([this]() {
             while(middleware) {
             middleware->tick();
@@ -134,6 +169,9 @@ ZynOscPlugin::ZynOscPlugin(unsigned long sampleRate)
 
 ZynOscPlugin::~ZynOscPlugin()
 {
+    // usually, this is not our job...
+    hide_ui();
+
     auto *tmp = middleware;
     middleware = 0;
     middlewareThread->join();

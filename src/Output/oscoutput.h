@@ -32,6 +32,11 @@ public:
 	void sendOsc(const char *port, const char *args, ...) override;
 	unsigned long buffersize() const override;
 
+    // TODO: handle UI callback?
+
+    void masterChangedCallback(zyn::Master* m);
+    static void _masterChangedCallback(void* ptr, zyn::Master* m);
+
 public:	// FEATURE: make these private?
 	/**
 	 * The sole constructor.
@@ -40,12 +45,15 @@ public:	// FEATURE: make these private?
 	ZynOscPlugin(unsigned long sampleRate);
 	~ZynOscPlugin();
 private:
+    void hide_ui();
+
 	pid_t ui_pid = 0;
 	long sampleRate;
-	MiddleWare *middleware;
+	zyn::MiddleWare *middleware;
 	std::thread *middlewareThread;
 
-	Config config;
+	zyn::Config config;
+    zyn::Master* master;
 };
 
 class ZynOscDescriptor : public OscDescriptor
@@ -54,7 +62,7 @@ class ZynOscDescriptor : public OscDescriptor
 	virtual const char* name() const;
 	virtual const char* maker() const;
 	virtual const char* copyright() const;
-	virtual int id() const;
+//	virtual int id() const;
 	virtual ZynOscPlugin* instantiate(unsigned long srate) const;
 };
 
