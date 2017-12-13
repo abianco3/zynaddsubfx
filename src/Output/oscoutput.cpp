@@ -153,6 +153,8 @@ ZynOscPlugin::ZynOscPlugin(unsigned long sampleRate)
     this->sampleRate  = sampleRate;
 
     config.init();
+    // disable compression for being conform with LMMS' format
+    config.cfg.GzipCompression = 0;
 
     zyn::sprng(time(NULL));
 
