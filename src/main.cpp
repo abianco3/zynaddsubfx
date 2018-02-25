@@ -655,7 +655,7 @@ int wmidi = -1;
 #ifndef WIN32
         gui_pid = fork();
         if(gui_pid == 0) {
-            execlp("zyn-fusion", "zyn-fusion", addr, "--builtin", "--no-hotload",  0);
+//            execlp("zyn-fusion", "zyn-fusion", addr, "--builtin", "--no-hotload",  0);
             execlp("./zyn-fusion", "zyn-fusion", addr, "--builtin", "--no-hotload",  0);
 
             err(1,"Failed to launch Zyn-Fusion");

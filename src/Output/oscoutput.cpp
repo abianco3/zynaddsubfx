@@ -71,41 +71,46 @@ void ZynOscPlugin::sendOsc(const char* port, const char* args, ...)
         va_end(ap);
     }
     else if(!strcmp(port, "/show-ui"))
-	{
-		if(ui_pid)
-		{
-			// ui is already running
-		}
-		else
-		{
-			const char *addr = middleware->getServerAddress();
-			ui_pid = fork();
-			if(ui_pid < 0) {
-				perror("fork() UI");
-			}
-			else if(ui_pid == 0)
-			{
-				execlp("zyn-fusion", "zyn-fusion", addr, "--builtin", "--no-hotload",  0);
-				execlp("./zyn-fusion", "zyn-fusion", addr, "--builtin", "--no-hotload",  0);
+    {
+        if(ui_pid)
+        {
+            // ui is already running
+        }
+        else
+        {
+            const char *addr = middleware->getServerAddress();
+            ui_pid = fork();
+            if(ui_pid < 0) {
+                perror("fork() UI");
+            }
+            else if(ui_pid == 0)
+            {
+                execlp("zyn-fusion", "zyn-fusion", addr, "--builtin", "--no-hotload",  0);
+                execlp("./zyn-fusion", "zyn-fusion", addr, "--builtin", "--no-hotload",  0);
 
-				perror("Failed to launch Zyn-Fusion");
-			}
-		}
-	}
+                perror("Failed to launch Zyn-Fusion");
+            }
+        }
+    }
     else if(!strcmp(port, "/hide-ui"))
-	{
+    {
         hide_ui();
-	}
-	else
-	{
-		va_list ap;
-		va_start(ap, args);
-		char buf[1024];
+    }
+    else
+    {
+        va_list ap;
+        va_start(ap, args);
+        char buf[1024];
 
-		rtosc_vmessage(buf, 1024, port, args, ap);
+        rtosc_vmessage(buf, 1024, port, args, ap);
         master->uToB->raw_write(buf);
-		va_end(ap);
-	}
+        va_end(ap);
+        }
+}
+
+bool ZynOscPlugin::recvOsc(const char **msg)
+{
+    return false;
 }
 
 void ZynOscPlugin::hide_ui()
@@ -160,6 +165,7 @@ ZynOscPlugin::ZynOscPlugin(unsigned long sampleRate)
 
     synth.alias();
     middleware = new zyn::MiddleWare(std::move(synth), &config);
+    middleware->setUiCallback(_uiCallback, this);
     masterChangedCallback(middleware->spawnMaster());
 
     middlewareThread = new std::thread([this]() {
@@ -181,16 +187,46 @@ ZynOscPlugin::~ZynOscPlugin()
     delete middlewareThread;
 }
 
+void ZynOscPlugin::uiCallback(const char *msg)
+{
+    if(!strcmp(msg, "/save_osc") || !strcmp(msg, "/load_xmz"))
+    {
+        mutex_guard guard(cb_mutex);
+#ifdef SAVE_OSC_DEBUG
+        fprintf(stderr, "Received message \"%s\".\n", msg);
+#endif
+        recent.operation = msg;
+        recent.file = rtosc_argument(msg, 0).s;
+        recent.stamp = rtosc_argument(msg, 1).t;
+        recent.status = rtosc_argument(msg, 2).T;
+    }
+    else if(!strcmp(msg, "/damage"))
+    {
+        // (ignore)
+    }
+    else if(!strcmp(msg, "/connection-info"))
+    {
+        // save info in some struct (no queue)
+        // TODO: check path-search
+    }
+    else if(!strcmp(msg, "/connection-remove"))
+    {
+        // TODO: save this info somewhere
+    }
+    else
+        fprintf(stderr, "Unknown message \"%s\", ignoring...\n", msg);
+}
+
 const char* ZynOscDescriptor::label() const { return "ZASF"; }
 const char* ZynOscDescriptor::name() const { return "ZynAddSubFX"; }
 const char* ZynOscDescriptor::maker() const {
     return "Nasca Octavian Paul <zynaddsubfx@yahoo.com>";
 }
-const char* ZynOscDescriptor::copyright() const {
-    return "GNU General Public License v2 or later";
+OscDescriptor::license_type ZynOscDescriptor::license() const {
+    return license_type::gpl_2_0;
 }
 
 ZynOscPlugin* ZynOscDescriptor::instantiate(unsigned long srate) const
 {
-	return new ZynOscPlugin(srate);
+    return new ZynOscPlugin(srate);
 }
