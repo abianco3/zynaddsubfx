@@ -2,7 +2,7 @@
   ZynAddSubFX - a software synthesizer
 
   oscoutput.h - Audio output for OSC plugins
-  Copyright (C) 2017 Johannes Lorenz
+  Copyright (C) 2017-2018 Johannes Lorenz
   Author: Johannes Lorenz
 
   This program is free software; you can redistribute it and/or
@@ -11,12 +11,15 @@
   of the License, or (at your option) any later version.
 */
 
+#include <cassert>
 #include <cstdarg>
 #include <unistd.h>
 #include <csignal>
+#include <cstring>
 #include <rtosc/thread-link.h>
 #include <rtosc/rtosc.h>
 
+#include "icon.h"
 #include "oscoutput.h"
 #include "../Misc/Master.h"
 #include "../Misc/Util.h"
@@ -47,30 +50,17 @@ namespace zyn {
 }
 
 
-void ZynOscPlugin::runSynth(float* outl, float* outr, unsigned long sample_count)
+void ZynOscPlugin::run(/*float* outl, float* outr, unsigned long sample_count*/)
 {
-    master->GetAudioOutSamples(sample_count,
-			       (int)sampleRate,
-			       outl, outr);
+    check_osc();
+    master->GetAudioOutSamples(p_buffersize,
+                   (int)sampleRate,
+                               p_out.left, p_out.right);
 }
 
-void ZynOscPlugin::sendOsc(const char* port, const char* args, ...)
+void ZynOscPlugin::ui_ext_show(bool show)
 {
-    if(!strcmp(port, "/save-master"))
-    {
-        va_list ap;
-        va_start(ap, args);
-        middleware->messageAnywhere("/save_xmz", "s", va_arg(ap, const char*));
-        va_end(ap);
-    }
-    else if(!strcmp(port, "/load-master"))
-    {
-        va_list ap;
-        va_start(ap, args);
-        middleware->messageAnywhere("/load_xmz", "s", va_arg(ap, const char*));
-        va_end(ap);
-    }
-    else if(!strcmp(port, "/show-ui"))
+    if(show)
     {
         if(ui_pid)
         {
@@ -85,32 +75,67 @@ void ZynOscPlugin::sendOsc(const char* port, const char* args, ...)
             }
             else if(ui_pid == 0)
             {
-                execlp("zyn-fusion", "zyn-fusion", addr, "--builtin", "--no-hotload",  0);
-                execlp("./zyn-fusion", "zyn-fusion", addr, "--builtin", "--no-hotload",  0);
+                // TODO: common func "launch fusion" (common with main.cpp)
+                auto fusion_exec = [&](const char* path) {
+                    execlp(path, "zyn-fusion", addr,
+                           "--builtin", "--no-hotload",  0);
+                };
+
+                const char* fusion_path = getenv("ZYN_FUSION_PATH");
+                printf("fusion_path: %s\n", fusion_path);
+                if(fusion_path) {
+
+                    const char* ld_library_path = getenv("LD_LIBRARY_PATH");
+                    if(ld_library_path)
+                    {
+                        std::string new_path = ld_library_path;
+                        new_path += ":";
+                        new_path += fusion_path;
+                        setenv("LD_LIBRARY_PATH", new_path.c_str(), 1);
+                    }
+
+                    std::string fusion_exe = fusion_path;
+                    fusion_exe += "/zest";
+                    printf("launching: %s\n", fusion_exe.c_str());
+                    fusion_exec(fusion_exe.c_str());
+                }
+                fusion_exec("./zyn-fusion"); // whatever LD_LIBRARY_PATH...
+                fusion_exec("zyn-fusion");
 
                 perror("Failed to launch Zyn-Fusion");
             }
         }
     }
-    else if(!strcmp(port, "/hide-ui"))
+    else
     {
         hide_ui();
     }
-    else
-    {
-        va_list ap;
-        va_start(ap, args);
-        char buf[1024];
-
-        rtosc_vmessage(buf, 1024, port, args, ap);
-        master->uToB->raw_write(buf);
-        va_end(ap);
-        }
 }
 
-bool ZynOscPlugin::recvOsc(const char **msg)
+const char** ZynOscPlugin::xpm_load() const
 {
-    return false;
+    return get_icon();
+}
+
+void ZynOscPlugin::check_osc()
+{
+    while(p_osc_in.read_msg())
+    {
+        const char* path = p_osc_in.path();
+        // TODO: if (osc_in == match_path("/save_master", "s")
+        if(!strcmp(path, "/save-master") ||
+           !strcmp(path, "/load-master"))
+        {
+            spa::audio::assert_types_are(path, "s", p_osc_in.types());
+            middleware->messageAnywhere((path[0] == 'l')
+                                        ? "/load_xmz"
+                                        : "/save_xmz", "s", p_osc_in.arg(0).s);
+        }
+        else
+        {
+            master->uToB->raw_write(path);
+        }
+    }
 }
 
 void ZynOscPlugin::hide_ui()
@@ -126,9 +151,11 @@ void ZynOscPlugin::hide_ui()
     }
 }
 
-unsigned long ZynOscPlugin::buffersize() const
-{
-    return master->synth.buffersize;
+unsigned ZynOscPlugin::net_port() const {
+    const char* addr = middleware->getServerAddress();
+    const char* port_str = strrchr(addr, ':');
+    assert(port_str);
+    return atoi(port_str + 1);
 }
 
 void ZynOscPlugin::masterChangedCallback(zyn::Master *m)
@@ -144,13 +171,14 @@ void ZynOscPlugin::_masterChangedCallback(void *ptr, zyn::Master *m)
 
 extern "C" {
 //! the main entry point
-const OscDescriptor* osc_descriptor(unsigned long )
+const spa::descriptor* spa_descriptor(unsigned long )
 {
     return new ZynOscDescriptor;
 }
 }
 
 ZynOscPlugin::ZynOscPlugin(unsigned long sampleRate)
+    : p_osc_in(16384, 2048)
 {
     zyn::SYNTH_T synth;
     synth.samplerate = sampleRate;
@@ -204,29 +232,44 @@ void ZynOscPlugin::uiCallback(const char *msg)
     {
         // (ignore)
     }
-    else if(!strcmp(msg, "/connection-info"))
-    {
-        // save info in some struct (no queue)
-        // TODO: check path-search
-    }
     else if(!strcmp(msg, "/connection-remove"))
     {
         // TODO: save this info somewhere
     }
-    else
-        fprintf(stderr, "Unknown message \"%s\", ignoring...\n", msg);
+//    else
+//        fprintf(stderr, "Unknown message \"%s\", ignoring...\n", msg);
 }
 
-const char* ZynOscDescriptor::label() const { return "ZASF"; }
-const char* ZynOscDescriptor::name() const { return "ZynAddSubFX"; }
-const char* ZynOscDescriptor::maker() const {
-    return "Nasca Octavian Paul <zynaddsubfx@yahoo.com>";
+spa::descriptor::hoster_t ZynOscDescriptor::hoster() const
+{
+    return hoster_t::github;
 }
-OscDescriptor::license_type ZynOscDescriptor::license() const {
+
+const char *ZynOscDescriptor::organization_url() const
+{
+    return nullptr; // none on SF
+}
+
+const char *ZynOscDescriptor::project_url() const
+{
+    return "zynaddsubfx";
+}
+
+const char* ZynOscDescriptor::label() const {
+    return "ZASF"; /* conforming to zyn's DSSI plugin */ }
+
+const char* ZynOscDescriptor::name() const { return "ZynAddSubFX"; }
+
+const char* ZynOscDescriptor::authors() const {
+    return "JohannesLorenz";
+}
+
+spa::descriptor::license_type ZynOscDescriptor::license() const {
     return license_type::gpl_2_0;
 }
 
-ZynOscPlugin* ZynOscDescriptor::instantiate(unsigned long srate) const
+const char* ZynOscDescriptor::project() const { return "TODO"; }
+ZynOscPlugin* ZynOscDescriptor::instantiate() const
 {
-    return new ZynOscPlugin(srate);
+    return new ZynOscPlugin(44100 /*TODO*/);
 }

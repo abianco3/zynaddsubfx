@@ -2,7 +2,7 @@
   ZynAddSubFX - a software synthesizer
 
   oscoutput.h - Audio output for OSC plugins
-  Copyright (C) 2017 Johannes Lorenz
+  Copyright (C) 2017-2018 Johannes Lorenz
   Author: Johannes Lorenz
 
   This program is free software; you can redistribute it and/or
@@ -16,24 +16,36 @@
 
 #include <thread>
 #include <mutex>
-// #include <queue>
 
-#include "./osc-interface.h" // TODO: path
+#include <spa/audio.h>
 
 #include "../globals.h"
 #include "../Misc/Config.h"
 #include "../Misc/MiddleWare.h"
 
-class ZynOscPlugin : public OscConsumer
+class ZynOscPlugin : public spa::plugin
 {
+    void check_osc();
 public:
-    static const OscDescriptor* getOscDescriptor(unsigned long index);
-    static const ZynOscPlugin* instantiate(const OscDescriptor*, unsigned long sampleRate);
+    static const spa::descriptor* getOscDescriptor(unsigned long index);
+    static const ZynOscPlugin* instantiate(const spa::descriptor*, unsigned long sampleRate);
 
-    void runSynth(float* outl, float* outr, unsigned long sample_count) override;
-    void sendOsc(const char *port, const char *args, ...) override;
-    bool recvOsc(const char** msg) override;
-    unsigned long buffersize() const override;
+    void run() override;
+
+    bool ui_ext() const override { return true; } // TODO...
+    void ui_ext_show(bool show) override;
+
+    const char** xpm_load() const override;
+
+    spa::port_ref_base& port(const char* pname) override {
+        using p = spa::port_ref_base;
+        switch(pname[0])
+        {
+            case 'b': return p_buffersize;
+            case 'o': return (pname[1] == 's') ? (p&)p_osc_in : (p&)p_out;
+            default: throw spa::port_not_found_error(pname);
+        }
+    }
 
     // TODO: handle UI callback?
 
@@ -64,6 +76,12 @@ public:	// FEATURE: make these private?
     }
 
     void uiCallback(const char* msg);
+
+    spa::audio::stereo::out p_out;
+    spa::audio::stereo::in p_in;
+    spa::audio::buffersize p_buffersize;
+    spa::audio::osc_ringbuffer_in p_osc_in;
+
 private:
     void hide_ui();
 
@@ -74,17 +92,35 @@ private:
 
     zyn::Config config;
     zyn::Master* master;
+
+    virtual unsigned net_port() const;
 };
 
-class ZynOscDescriptor : public OscDescriptor
+class ZynOscDescriptor : public spa::descriptor
 {
-// virtual functions
-    const char* label() const;
-    const char* name() const;
-    const char* maker() const;
-    license_type license() const;
+    hoster_t hoster() const override;
+    const char* organization_url() const override;
+    const char* project_url() const override;
+    const char* label() const override;
+
+    const char* project() const override;
+    const char* name() const override;
+    const char* authors() const override;
+
+    license_type license() const override;
+
+    virtual const char* description_line() const { return "ZynAddSubFX"; }
+    virtual const char* description_full() const {
+        return "The ZynAddSubFX synthesizer"; }
+
 //	int id() const;
-    ZynOscPlugin* instantiate(unsigned long srate) const;
+
+    ZynOscPlugin* instantiate() const;
+
+    virtual spa::simple_vec<spa::simple_str> port_names() const override
+    {
+        return { "out", "buffersize", "osc" };
+    }
 };
 
 #endif

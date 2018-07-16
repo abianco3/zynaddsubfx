@@ -534,20 +534,6 @@ target_link_libraries(zynaddsubfx
     ${PLATFORM_LIBRARIES}
     )
 
-#osc plugin library
-add_library(zynaddsubfx_osc SHARED
-            UI/ConnectionDummy.cpp
-            globals.cpp
-            Output/oscoutput.cpp
-            Output/oscoutput.h)
-target_link_libraries(zynaddsubfx_osc
-                      zynaddsubfx_core
-                      ${OS_LIBRARIES}
-                      ${LIBLO_LIBRARIES}
-)
-install(TARGETS zynaddsubfx_osc LIBRARY DESTINATION ${PluginLibDir}/osc/)
-
-
 if (DssiEnable)
 	add_library(zynaddsubfx_dssi SHARED
 			UI/ConnectionDummy.cpp
@@ -567,6 +553,7 @@ if (DssiEnable)
 		)
     install(TARGETS zynaddsubfx_dssi LIBRARY DESTINATION ${PluginLibDir}/dssi/)
 endif()
+add_subdirectory(Output)
 
 install(TARGETS zynaddsubfx
 	RUNTIME DESTINATION bin
