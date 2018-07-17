@@ -117,6 +117,16 @@ const char** ZynOscPlugin::xpm_load() const
     return get_icon();
 }
 
+spa::port_ref_base &ZynOscPlugin::port(const char *pname) {
+    using p = spa::port_ref_base;
+    switch(pname[0])
+    {
+        case 'b': return p_buffersize;
+        case 'o': return (pname[1] == 's') ? (p&)p_osc_in : (p&)p_out;
+        default: throw spa::port_not_found_error(pname);
+    }
+}
+
 void ZynOscPlugin::check_osc()
 {
     while(p_osc_in.read_msg())
@@ -272,4 +282,9 @@ const char* ZynOscDescriptor::project() const { return "TODO"; }
 ZynOscPlugin* ZynOscDescriptor::instantiate() const
 {
     return new ZynOscPlugin(44100 /*TODO*/);
+}
+
+spa::simple_vec<spa::simple_str> ZynOscDescriptor::port_names() const
+{
+    return { "out", "buffersize", "osc" };
 }

@@ -37,15 +37,8 @@ public:
 
     const char** xpm_load() const override;
 
-    spa::port_ref_base& port(const char* pname) override {
-        using p = spa::port_ref_base;
-        switch(pname[0])
-        {
-            case 'b': return p_buffersize;
-            case 'o': return (pname[1] == 's') ? (p&)p_osc_in : (p&)p_out;
-            default: throw spa::port_not_found_error(pname);
-        }
-    }
+    std::map<std::string, port_ref_base*> ports;
+    spa::port_ref_base& port(const char* pname) override;
 
     // TODO: handle UI callback?
 
@@ -117,10 +110,7 @@ class ZynOscDescriptor : public spa::descriptor
 
     ZynOscPlugin* instantiate() const;
 
-    virtual spa::simple_vec<spa::simple_str> port_names() const override
-    {
-        return { "out", "buffersize", "osc" };
-    }
+    virtual spa::simple_vec<spa::simple_str> port_names() const override;
 };
 
 #endif
