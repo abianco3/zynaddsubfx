@@ -62,6 +62,26 @@ namespace zyn {
 using std::string;
 int Pexitprogram = 0;
 
+#ifdef __APPLE__
+#include <mach/clock.h>
+#include <mach/mach.h>
+#endif
+
+/* work around missing clock_gettime on OSX */
+static void monotonic_clock_gettime(struct timespec *ts) {
+#ifdef __APPLE__
+    clock_serv_t cclock;
+    mach_timespec_t mts;
+    host_get_clock_service(mach_host_self(), SYSTEM_CLOCK, &cclock);
+    clock_get_time(cclock, &mts);
+    mach_port_deallocate(mach_task_self(), cclock);
+    ts->tv_sec = mts.tv_sec;
+    ts->tv_nsec = mts.tv_nsec;
+#else
+    clock_gettime(CLOCK_MONOTONIC, ts);
+#endif
+}
+
 /******************************************************************************
  *                        LIBLO And Reflection Code                           *
  *                                                                            *
@@ -72,64 +92,6 @@ int Pexitprogram = 0;
 static void liblo_error_cb(int i, const char *m, const char *loc)
 {
     fprintf(stderr, "liblo :-( %d-%s@%s\n",i,m,loc);
-}
-
-void path_search(const char *m, const char *url)
-{
-    using rtosc::Ports;
-    using rtosc::Port;
-
-    //assumed upper bound of 32 ports (may need to be resized)
-    char         types[256+1];
-    rtosc_arg_t  args[256];
-    size_t       pos    = 0;
-    const Ports *ports  = NULL;
-    const char  *str    = rtosc_argument(m,0).s;
-    const char  *needle = rtosc_argument(m,1).s;
-
-    //zero out data
-    memset(types, 0, sizeof(types));
-    memset(args,  0, sizeof(args));
-
-    if(!*str) {
-        ports = &Master::ports;
-    } else {
-        const Port *port = Master::ports.apropos(rtosc_argument(m,0).s);
-        if(port)
-            ports = port->ports;
-    }
-
-    if(ports) {
-        //RTness not confirmed here
-        for(const Port &p:*ports) {
-            if(strstr(p.name, needle) != p.name || !p.name)
-                continue;
-            types[pos]    = 's';
-            args[pos++].s = p.name;
-            types[pos]    = 'b';
-            if(p.metadata && *p.metadata) {
-                args[pos].b.data = (unsigned char*) p.metadata;
-                auto tmp = rtosc::Port::MetaContainer(p.metadata);
-                args[pos++].b.len  = tmp.length();
-            } else {
-                args[pos].b.data = (unsigned char*) NULL;
-                args[pos++].b.len  = 0;
-            }
-        }
-    }
-
-
-    //Reply to requester [wow, these messages are getting huge...]
-    char buffer[1024*20];
-    size_t length = rtosc_amessage(buffer, sizeof(buffer), "/paths", types, args);
-    if(length) {
-        lo_message msg  = lo_message_deserialise((void*)buffer, length, NULL);
-        lo_address addr = lo_address_new_from_url(url);
-        if(addr)
-            lo_send_message(addr, buffer, msg);
-        lo_address_free(addr);
-        lo_message_free(msg);
-    }
 }
 
 static int handler_function(const char *path, const char *types, lo_arg **argv,
@@ -153,8 +115,26 @@ static int handler_function(const char *path, const char *types, lo_arg **argv,
     memset(buffer, 0, sizeof(buffer));
     size_t size = 2048;
     lo_message_serialise(msg, path, buffer, &size);
-    if(!strcmp(buffer, "/path-search") && !strcmp("ss", rtosc_argument_string(buffer))) {
-        path_search(buffer, mw->activeUrl().c_str());
+
+    if(!strcmp(buffer, "/path-search") &&
+       !strcmp("ss", rtosc_argument_string(buffer))) {
+        auto reply_cb = [](const char* url, const char* types, const rtosc_arg_t* args)
+        {
+            char buffer[1024*20];
+            size_t length = rtosc_amessage(buffer, sizeof(buffer),
+                                           "/paths", types, args);
+            if(length) {
+                lo_message msg  = lo_message_deserialise((void*)buffer,
+                                                         length, NULL);
+                lo_address addr = lo_address_new_from_url(url);
+                if(addr)
+                    lo_send_message(addr, buffer, msg);
+                lo_address_free(addr);
+                lo_message_free(msg);
+            }
+        };
+        rtosc::path_search(Master::ports, buffer, mw->activeUrl().c_str(),
+                           reply_cb);
     } else if(buffer[0]=='/' && strrchr(buffer, '/')[1]) {
         mw->transmitMsg(rtosc::Ports::collapsePath(buffer));
     }
@@ -320,10 +300,15 @@ struct NonRtObjStore
     void handleOscil(const char *msg, rtosc::RtData &d) {
         string obj_rl(d.message, msg);
         void *osc = get(obj_rl);
-        assert(osc);
-        strcpy(d.loc, obj_rl.c_str());
-        d.obj = osc;
-        OscilGen::non_realtime_ports.dispatch(msg, d);
+        if(osc)
+        {
+            strcpy(d.loc, obj_rl.c_str());
+            d.obj = osc;
+            OscilGen::non_realtime_ports.dispatch(msg, d);
+        }
+        else
+            fprintf(stderr, "Warning: trying to access oscil object \"%s\","
+                            "which does not exist\n", obj_rl.c_str());
     }
     void handlePad(const char *msg, rtosc::RtData &d) {
         string obj_rl(d.message, msg);
@@ -333,18 +318,23 @@ struct NonRtObjStore
             d.matches++;
             d.reply((obj_rl+"needPrepare").c_str(), "F");
         } else {
-            if(!pad)
-                return;
-            strcpy(d.loc, obj_rl.c_str());
-            d.obj = pad;
-            PADnoteParameters::non_realtime_ports.dispatch(msg, d);
-            if(rtosc_narguments(msg)) {
-                if(!strcmp(msg, "oscilgen/prepare"))
-                    ; //ignore
-                else {
-                    d.reply((obj_rl+"needPrepare").c_str(), "T");
+            if(pad)
+            {
+                strcpy(d.loc, obj_rl.c_str());
+                d.obj = pad;
+                PADnoteParameters::non_realtime_ports.dispatch(msg, d);
+                if(rtosc_narguments(msg)) {
+                    if(!strcmp(msg, "oscilgen/prepare"))
+                        ; //ignore
+                    else {
+                        d.reply((obj_rl+"needPrepare").c_str(), "T");
+                    }
                 }
             }
+            else
+                fprintf(stderr, "Warning: trying to access pad synth object "
+                                "\"%s\", which does not exist\n",
+                        obj_rl.c_str());
         }
     }
 };
@@ -1641,7 +1631,7 @@ MiddleWareImpl::MiddleWareImpl(MiddleWare *mw, SYNTH_T synth_,
 
     //Setup starting time
     struct timespec time;
-    clock_gettime(CLOCK_MONOTONIC, &time);
+    monotonic_clock_gettime(&time);
     start_time_sec  = time.tv_sec;
     start_time_nsec = time.tv_nsec;
 
@@ -1736,7 +1726,7 @@ void MiddleWareImpl::heartBeat(Master *master)
     //Current offline status
     
     struct timespec time;
-    clock_gettime(CLOCK_MONOTONIC, &time);
+    monotonic_clock_gettime(&time);
     uint32_t now = (time.tv_sec-start_time_sec)*100 +
                    (time.tv_nsec-start_time_nsec)*1e-9*100;
     int32_t last_ack   = master->last_ack;

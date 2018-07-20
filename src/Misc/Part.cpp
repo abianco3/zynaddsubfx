@@ -27,7 +27,6 @@
 #include "../Synth/PADnote.h"
 #include "../Containers/ScratchString.h"
 #include "../DSP/FFTwrapper.h"
-#include "../Misc/Util.h"
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -133,7 +132,7 @@ static const Ports partPorts = {
                 p->Ppolymode = 0;
                 p->Plegatomode = 1;
             }}},
-    {"clear:", rProp(internal) rDoc("Reset Part To Defaults"), 0, 
+    {"clear:", rProp(internal) rDoc("Reset Part To Defaults"), 0,
         [](const char *, RtData &d)
         {
             //XXX todo forward this event for middleware to handle
@@ -174,9 +173,9 @@ static const Ports partPorts = {
 #define rObject Part::Kit
 static const Ports kitPorts = {
     rSelf(Part::Kit, rEnabledBy(Penabled)),
-    rRecurp(padpars, "Padnote parameters"),
-    rRecurp(adpars, "Adnote parameters"),
-    rRecurp(subpars, "Adnote parameters"),
+    rRecurp(padpars, rEnabledBy(Ppadenabled), "Padnote parameters"),
+    rRecurp(adpars, rEnabledBy(Padenabled), "Adnote parameters"),
+    rRecurp(subpars, rEnabledBy(Psubenabled), "Subnote parameters"),
     rToggle(firstkit, rProp(internal), "If this is the part's first kit"),
     rToggle(Penabled, rDefaultDepends(firstkit),
             rPreset(true, true), rPreset(false, false),
@@ -240,7 +239,7 @@ Part::Part(Allocator &alloc, const SYNTH_T &synth_, const AbsTime &time_,
     interpolation(interpolation)
 {
     if(prefix_)
-        strncpy(prefix, prefix_, sizeof(prefix));
+        fast_strcpy(prefix, prefix_, sizeof(prefix));
     else
         memset(prefix, 0, sizeof(prefix));
 
@@ -534,7 +533,7 @@ bool Part::NoteOn(unsigned char note,
                             wm, (pre+"kit"+i+"/adpars/").c_str), 0, i});
             if(item.Psubenabled)
                 notePool.insertNote(note, sendto,
-                        {memory.alloc<SUBnote>(kit[i].subpars, pars), 1, i});
+                        {memory.alloc<SUBnote>(kit[i].subpars, pars, wm, (pre+"kit"+i+"/subpars/").c_str), 1, i});
             if(item.Ppadenabled)
                 notePool.insertNote(note, sendto,
                         {memory.alloc<PADnote>(kit[i].padpars, pars, interpolation, wm,
@@ -571,7 +570,7 @@ void Part::NoteOff(unsigned char note) //release the key
         if(!ctl.sustain.sustain) { //the sustain pedal is not pushed
             if((isMonoMode() || isLegatoMode()) && !monomemEmpty())
                 MonoMemRenote();//Play most recent still active note
-            else 
+            else
                 notePool.release(desc);
         }
         else {   //the sustain pedal is pushed

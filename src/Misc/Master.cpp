@@ -114,7 +114,9 @@ static const Ports sysefsendto =
         }}
 };
 
-#define rBegin [](const char *msg, RtData &d) { rtosc::AutomationMgr &a = *(AutomationMgr*)d.obj
+#define rBegin [](const char *msg, RtData &d) { \
+    (void) msg; \
+    rtosc::AutomationMgr &a = *(AutomationMgr*)d.obj
 #define rEnd }
 
 static int extract_num(const char *&msg)
@@ -298,8 +300,7 @@ static const Ports automate_ports = {
         if(a.active_slot >= 0)
             a.createBinding(a.active_slot, rtosc_argument(msg, 0).s, true);
         rEnd},
-    // TODO: remove rNoWalk
-    {"slot#16/", rNoWalk rDoc("Parameters of individual automation slots"), &slot_ports,
+    {"slot#16/", rDoc("Parameters of individual automation slots"), &slot_ports,
         rBegin;
         (void)a;
         d.push_index(get_next_int(msg));
@@ -513,19 +514,8 @@ static const Ports master_ports = {
         [](const char *, rtosc::RtData &d) {d.reply("/undo_pause", "");}},
     {"undo_resume:",rProp(internal) rDoc("resume undo event recording"),0,
         [](const char *, rtosc::RtData &d) {d.reply("/undo_resume", "");}},
-    {"last_dnd::s", rProp(internal) rDoc("Last Drag and Drop OSC path"),0,
-        rBOIL_BEGIN
-            if(!strcmp("", args)) {
-                data.reply(loc, "c", obj->dnd_buffer);
-                *obj->dnd_buffer = 0;
-            } else {
-                assert(!*obj->dnd_buffer);
-                const char* var = rtosc_argument(msg, 0).s;
-                printf("receiving /last_dnd %s\n",var);
-                strncpy(obj->dnd_buffer, var, Master::dnd_buffer_size);
-            }
-        rBOIL_END },
-    {"config/", rNoWalk rDoc("Top Level Application Configuration Parameters"),
+    {"config/", rNoDefaults
+        rDoc("Top Level Application Configuration Parameters"),
         &Config::ports, [](const char *, rtosc::RtData &d){d.forward();}},
     {"presets/", rDoc("Parameter Presets"), &preset_ports, rBOIL_BEGIN
         SNIP
@@ -617,6 +607,7 @@ class DataObj:public rtosc::RtData
         virtual void forward(const char *reason) override
         {
             assert(message);
+            (void) reason;
             reply("/forward", "");
             printf("forwarding '%s'\n", message);
             forwarded = true;
@@ -648,6 +639,7 @@ void Master::saveAutomation(XMLwrapper &xml, const rtosc::AutomationMgr &midi)
             xml.beginbranch("slot", i);
             XmlNode params("params");
             params["midi-cc"] = to_s(slot.midi_cc);
+            params["name"] = to_s(slot.name);
             xml.add(params);
             for(int j=0; j<midi.per_slot; ++j) {
                 const auto &au = slot.automations[j];
@@ -693,12 +685,21 @@ void Master::loadAutomation(XMLwrapper &xml, rtosc::AutomationMgr &midi)
                         midi.createBinding(i, path.c_str(), false);
                         midi.setSlotSubGain(i, j, gain);
                         midi.setSlotSubOffset(i, j, offset);
+                        midi.updateMapping(i, j);
                         xml.exitbranch();
                     }
                 }
                 for(auto node:xml.getBranch())
+                {
                     if(node.name == "params")
+                    {
                         slot.midi_cc = atoi(node["midi-cc"].c_str());
+                        if(node["name"] != "")
+                        {
+                            strncpy(slot.name, node["name"].c_str(), sizeof(slot.name) - 1);
+                        }
+                    }
+                }
                 xml.exitbranch();
             }
         }

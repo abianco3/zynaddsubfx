@@ -231,7 +231,8 @@ static const rtosc::Ports non_realtime_ports =
     rParamI(Pquality.oct, rShort("octaves"), rLinear(0,7), rDefault(3),
             "Number of octaves to sample (above the first sample"),
 
-    {"Pbandwidth::i", rShort("bandwidth") rProp(parameter) rLinear(0,1000) rDoc("Bandwith Of Harmonics"), NULL,
+    {"Pbandwidth::i", rShort("bandwidth") rProp(parameter) rLinear(0,1000)
+        rDefault(500) rDoc("Bandwith Of Harmonics"), NULL,
         [](const char *msg, rtosc::RtData &d) {
             PADnoteParameters *p = ((PADnoteParameters*)d.obj);
             if(rtosc_narguments(msg)) {
@@ -269,7 +270,7 @@ static const rtosc::Ports non_realtime_ports =
             d.reply(d.loc, "i", (int)realbw);
             delete[] tmp;}},
     {"harmonic_profile:", rProp(non-realtime) rDoc("UI display of the harmonic profile"),
-        NULL, [](const char *m, rtosc::RtData &d) {
+        NULL, [](const char *, rtosc::RtData &d) {
             PADnoteParameters *p = ((PADnoteParameters*)d.obj);
 #define RES 512
             char        types[RES+2] = {0};
