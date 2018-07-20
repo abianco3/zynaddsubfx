@@ -54,7 +54,7 @@ void ZynOscPlugin::run(/*float* outl, float* outr, unsigned long sample_count*/)
 {
     check_osc();
     master->GetAudioOutSamples(p_buffersize,
-                   (int)sampleRate,
+                               (int)sampleRate,
                                p_out.left, p_out.right);
 }
 
@@ -117,13 +117,201 @@ const char** ZynOscPlugin::xpm_load() const
     return get_icon();
 }
 
-spa::port_ref_base &ZynOscPlugin::port(const char *pname) {
-    using p = spa::port_ref_base;
-    switch(pname[0])
+/*// TODO: make ports with full zyn metadata
+struct zyn_port
+{
+    bool linear; //!< vs log
+
+};*/
+
+spa::port_ref_base* port_from_osc_args(const char* args)
+{
+    if(!args)
+        return nullptr;
+    for(; *args == ':'; ++args) ;
+    if(strchr(args, 'S'))
+        return new spa::audio::control_in<int>; // TODO: separate port type
+    else switch(*args)
     {
-        case 'b': return p_buffersize;
-        case 'o': return (pname[1] == 's') ? (p&)p_osc_in : (p&)p_out;
-        default: throw spa::port_not_found_error(pname);
+        case 'T':
+        case 'F':
+            return new spa::audio::control_in<bool>;
+        case 'i': return new spa::audio::control_in<int>;
+        case 'h': return new spa::audio::control_in<long long int>;
+        case 'f': return new spa::audio::control_in<float>;
+        case 'd': return new spa::audio::control_in<double>;
+        default: return nullptr;
+    }
+}
+
+struct set_min : public spa::audio::visitor
+{
+    const char* min = nullptr;
+    template<class T> using ci = spa::audio::control_in<T>;
+    void visit(ci<int> &p) override { p.min = atoi(min); }
+    void visit(ci<long long int> &p) override { p.min = atoll(min); }
+    void visit(ci<float> &p) override { p.min = atof(min); }
+    void visit(ci<double> &p) override { p.min = atof(min); }
+};
+
+struct set_max : public spa::audio::visitor
+{
+    const char* max = nullptr;
+    template<class T> using ci = spa::audio::control_in<T>;
+    void visit(ci<int> &p) override { p.max = atoi(max); }
+    void visit(ci<long long int> &p) override { p.min = atoll(max); }
+    void visit(ci<float> &p) override { p.min = atof(max); }
+    void visit(ci<double> &p) override { p.min = atof(max); }
+};
+
+struct is_bool_t : public spa::audio::visitor
+{
+    bool res = false;
+    template<class T> using ci = spa::audio::control_in<T>;
+    void visit(ci<bool> &) override { res = true; }
+};
+
+// TODO: bad design of control_in<T>
+struct set_scale_type : public spa::audio::visitor
+{
+    template<class T> using ci = spa::audio::control_in<T>;
+    spa::audio::scale_type_t scale_type = spa::audio::scale_type_t::linear;
+    void visit(ci<int> &p) override { p.scale_type = scale_type; }
+    void visit(ci<long long int> &p) override { p.scale_type = scale_type; }
+    void visit(ci<float> &p) override { p.scale_type = scale_type; }
+    void visit(ci<double> &p) override { p.scale_type = scale_type; }
+};
+
+//! class for capturing numerics (not pointers to string/blob memory involved)
+class capture : public rtosc::RtData
+{
+    rtosc_arg_val_t res;
+    void replyArray(const char*, const char *args,
+                    rtosc_arg_t *vals) override
+    {
+        assert(*args && args[1] == 0); // reply only one arg for numeric ports
+        res.type = args[0];
+        res.val = vals[0];
+    }
+
+    void reply_va(const char *args, va_list va)
+    {
+        rtosc_v2argvals(&res, 1, args, va);
+    }
+
+    void reply(const char *, const char *args, ...) override
+    {
+        va_list va;
+        va_start(va,args);
+        reply_va(args, va);
+        va_end(va);
+    }
+public:
+    const rtosc_arg_val_t& val() { return res; }
+};
+
+class set_init : public spa::audio::visitor
+{
+    template<class T> using ci = spa::audio::control_in<T>;
+    const rtosc_arg_val_t& av;
+    void visit(ci<int> &p) override { assert(av.type == 'i'); p.def = av.val.i; }
+    void visit(ci<long long int> &p) override { assert(av.type == 'h'); p.def = av.val.h; }
+    void visit(ci<float> &p) override { assert(av.type == 'f'); p.def = av.val.f; }
+    void visit(ci<double> &p) override { assert(av.type == 'd'); p.def = av.val.d; }
+    void visit(ci<bool> &p) override { assert(av.type == 'T' || av.type == 'F'); p.def = av.val.T; }
+public:
+    set_init(const rtosc_arg_val_t& av) : av(av) {}
+};
+
+spa::port_ref_base* new_port(const char* metadata, const char* args)
+{
+    assert(args);
+    rtosc::Port::MetaContainer meta(metadata);
+    bool is_enumerated = false;
+    (void)is_enumerated; // TODO
+    bool is_parameter = false;
+    set_min min_setter;
+    set_max max_setter;
+    set_scale_type scale_type_setter;
+
+    for(const auto x : meta)
+    {
+        if(!strcmp(x.title, "parameter"))
+            is_parameter = true;
+        else if(!strcmp(x.title, "enumerated"))
+            is_enumerated = true;
+        else if(!strcmp(x.title, "min"))
+            min_setter.min = x.value;
+        else if(!strcmp(x.title, "max"))
+            max_setter.max = x.value;
+        else if(!strcmp(x.title, "scale")) {
+            if(!strcmp(x.value, "linear"))
+            {}
+            else if(!strcmp(x.value, "logarithmic"))
+                scale_type_setter.scale_type =
+                    spa::audio::scale_type_t::logartihmic;
+            else throw std::runtime_error("unknown scale type");
+        }
+
+        /*else if(!strncmp(x.title, "map ", 4)) {
+            ++mappings[atoi(x.title + 4)];
+            ++mapping_values[x.value];
+        }*/
+    }
+    if(is_parameter)
+    {
+        spa::port_ref_base* res = port_from_osc_args(args);
+        is_bool_t is_bool;
+        res->accept(is_bool);
+        if(min_setter.min) res->accept(min_setter); else if(!is_bool.res) throw std::runtime_error("Port has no minimum value");
+        if(max_setter.max) res->accept(max_setter); else if(!is_bool.res) throw std::runtime_error("Port has no maximum value");
+        if(scale_type_setter.scale_type != spa::audio::scale_type_t::logartihmic)
+            res->accept(scale_type_setter);
+        return res;
+    }
+    else return nullptr;
+}
+
+spa::port_ref_base &ZynOscPlugin::port(const char *pname) {
+    // TODO: add those to map?
+    if(!strcmp(pname, "buffersize")) return p_buffersize; // TODO: use slashes?
+    else if(!strcmp(pname, "osc")) return p_osc_in;
+    else if(!strcmp(pname, "out")) return p_out;
+    else
+    {
+        spa::port_ref_base* new_ref = nullptr;
+        char types[2+1];
+        rtosc_arg_t args[2];
+        rtosc::path_search(zyn::Master::ports, pname, nullptr,
+                           types, sizeof(types), args, sizeof(args));
+        if(!strcmp(types, "sb"))
+        {
+            const char* metadata = reinterpret_cast<char*>(args[1].b.data);
+            if(!metadata)
+                metadata = "";
+            new_ref = new_port(metadata, strchr(args[0].s, ':'));
+        }
+
+        if(new_ref) {
+            capture cap;
+            char loc[1024];
+            cap.obj = master;
+            cap.loc = loc;
+            cap.loc_size = sizeof(loc);
+            char msgbuf[1024];
+            std::size_t length =
+                rtosc_message(msgbuf, sizeof(msgbuf), pname, "");
+            if(!length)
+                throw std::runtime_error("Could not build rtosc message");
+            zyn::Master::ports.dispatch(msgbuf, cap, true);
+            if(cap.matches != 1)
+                throw std::runtime_error("Could not find port"); // TODO...
+            set_init init_setter(cap.val());
+            new_ref->accept(init_setter);
+            ports.emplace(pname, new_ref);
+            return *new_ref;
+        } else
+            throw spa::port_not_found_error(pname);
     }
 }
 
@@ -143,6 +331,13 @@ void ZynOscPlugin::check_osc()
         }
         else
         {
+#if 0
+            printf("received: %s %s\n", path, p_osc_in.types());
+            if(p_osc_in.types()[0] == 'i')
+            {
+                printf("arg0: %d\n", +p_osc_in.arg(0).i);
+            }
+#endif
             master->uToB->raw_write(path);
         }
     }
@@ -247,7 +442,8 @@ void ZynOscPlugin::uiCallback(const char *msg)
         // TODO: save this info somewhere
     }
 //    else
-//        fprintf(stderr, "Unknown message \"%s\", ignoring...\n", msg);
+//        fprintf(stderr, "OSC Plugin: Unknown message \"%s\" from "
+//            "MiddleWare, ignoring...\n", msg);
 }
 
 spa::descriptor::hoster_t ZynOscDescriptor::hoster() const

@@ -16,6 +16,7 @@
 
 #include <thread>
 #include <mutex>
+#include <map>
 
 #include <spa/audio.h>
 
@@ -37,7 +38,7 @@ public:
 
     const char** xpm_load() const override;
 
-    std::map<std::string, port_ref_base*> ports;
+    std::map<std::string, spa::port_ref_base*> ports;
     spa::port_ref_base& port(const char* pname) override;
 
     // TODO: handle UI callback?
